@@ -1,0 +1,5 @@
+Búsqueda: el usuario escribe un texto en una caja y la página muestra solo las canciones que lo contienen. No importa si usa mayúsculas o minúsculas.
+Campos de búsqueda: el usuario marca en qué columnas quiere buscar (por ejemplo título, artista, género). Por defecto se busca en todas las columnas de texto de tu CSV, así que funciona aunque no sepa cómo se llaman.
+Elegir canciones: cada resultado tiene una casilla “Elegir”. El usuario marca una o varias y aprieta Agregar elegidas.
+Quitar canciones: las elegidas aparecen en otra tabla, con una casilla “Quitar”. Se marcan las que sobran y se aprieta Quitar marcadas. También hay un botón Vaciar todo.
+Base de preferencias: la lista de canciones seleccionadas, que queda guardada mientras la página esté abierta.
