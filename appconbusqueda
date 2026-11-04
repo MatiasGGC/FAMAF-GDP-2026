@@ -1,0 +1,141 @@
+# ---------------------------------------------------------
+# BUSCADOR DE CANCIONES (continuación)
+#
+# Qué agrega esta versión:
+# - Una caja de búsqueda y un selector para elegir en qué
+#   campos buscar (canción, artista, álbum, género, subgénero).
+# - Un filtro opcional por género.
+# - Una tabla de resultados con una casilla "Elegir".
+# - Una lista de canciones seleccionadas, donde se pueden
+#   quitar una por una o vaciar todo.
+#
+# Requisito:
+# - El archivo canciones.csv debe estar en la misma carpeta
+#   que app.py. No hace falta instalar nada nuevo.
+#
+# Cómo usarlo:
+# 1. Escribir en la caja de búsqueda; la tabla se filtra sola.
+# 2. Marcar o desmarcar campos en "Buscar en estos campos".
+# 3. Si se desea, elegir uno o más géneros en el filtro.
+# 4. Marcar la casilla "Elegir" de una o varias canciones y
+#    presionar "Agregar elegidas".
+# 5. Las canciones aparecen abajo, en "Mis canciones
+#    seleccionadas". Marcar "Quitar" y presionar "Quitar
+#    marcadas" para sacar algunas, o "Vaciar todo" para
+#    empezar de nuevo.
+#
+# Nota: las canciones elegidas se guardan mientras la página
+# esté abierta. Si se recarga el navegador, se pierden.
+# ---------------------------------------------------------
+import streamlit as st
+import pandas as pd
+
+# --- Cargar los datos ---
+canciones = pd.read_csv("canciones.csv")
+
+st.title("🎵 Buscador de canciones")
+
+# --- Columnas que se muestran y cómo se llaman en pantalla ---
+nombres_en_pantalla = {
+    "track_name": "Canción",
+    "track_artist": "Artista",
+    "track_album_name": "Álbum",
+    "playlist_genre": "Género",
+    "playlist_subgenre": "Subgénero",
+    "track_popularity": "Popularidad",
+}
+columnas_visibles = list(nombres_en_pantalla.keys())
+
+# --- Campos donde se puede buscar ---
+campos_de_busqueda = {
+    "Canción": "track_name",
+    "Artista": "track_artist",
+    "Álbum": "track_album_name",
+    "Género": "playlist_genre",
+    "Subgénero": "playlist_subgenre",
+}
+
+# --- Memoria de la página ---
+if "canciones_elegidas" not in st.session_state:
+    st.session_state.canciones_elegidas = []
+if "reinicio_casillas" not in st.session_state:
+    st.session_state.reinicio_casillas = 0
+
+# --- Buscador ---
+campos_marcados = st.multiselect(
+    "Buscar en estos campos:",
+    list(campos_de_busqueda.keys()),
+    default=["Canción", "Artista", "Álbum"],
+)
+columnas_donde_buscar = [campos_de_busqueda[campo] for campo in campos_marcados]
+
+texto_buscado = st.text_input("Escribe para buscar (canción, artista, álbum...)")
+
+lista_de_generos = sorted(canciones["playlist_genre"].dropna().unique())
+generos_marcados = st.multiselect("Filtrar por género (opcional):", lista_de_generos)
+
+# --- Filtrar los resultados ---
+resultados = canciones
+
+if texto_buscado and columnas_donde_buscar:
+    filas_que_coinciden = resultados[columnas_donde_buscar].astype(str).apply(
+        lambda columna: columna.str.contains(texto_buscado, case=False, na=False, regex=False)
+    ).any(axis=1)
+    resultados = resultados[filas_que_coinciden]
+
+if generos_marcados:
+    resultados = resultados[resultados["playlist_genre"].isin(generos_marcados)]
+
+st.write(f"Se encontraron {len(resultados)} canciones")
+
+# --- Tabla de resultados con casilla "Elegir" ---
+tabla_resultados = resultados[columnas_visibles].copy()
+tabla_resultados.insert(0, "Elegir", False)
+
+tabla_marcada = st.data_editor(
+    tabla_resultados,
+    disabled=columnas_visibles,
+    column_config=nombres_en_pantalla,
+    key=f"resultados_{st.session_state.reinicio_casillas}",
+)
+
+if st.button("➕ Agregar elegidas"):
+    filas_marcadas = tabla_marcada[tabla_marcada["Elegir"]].index.tolist()
+    for numero_fila in filas_marcadas:
+        if numero_fila not in st.session_state.canciones_elegidas:
+            st.session_state.canciones_elegidas.append(numero_fila)
+    st.session_state.reinicio_casillas += 1
+    st.rerun()
+
+# --- Canciones seleccionadas ---
+st.subheader("⭐ Mis canciones seleccionadas")
+
+if st.session_state.canciones_elegidas:
+    tabla_elegidas = canciones.loc[st.session_state.canciones_elegidas, columnas_visibles].copy()
+    tabla_elegidas.insert(0, "Quitar", False)
+
+    tabla_elegidas_marcada = st.data_editor(
+        tabla_elegidas,
+        disabled=columnas_visibles,
+        column_config=nombres_en_pantalla,
+        key=f"elegidas_{st.session_state.reinicio_casillas}",
+    )
+
+    columna_izquierda, columna_derecha = st.columns(2)
+
+    if columna_izquierda.button("🗑️ Quitar marcadas"):
+        filas_a_quitar = tabla_elegidas_marcada[tabla_elegidas_marcada["Quitar"]].index.tolist()
+        st.session_state.canciones_elegidas = [
+            numero_fila
+            for numero_fila in st.session_state.canciones_elegidas
+            if numero_fila not in filas_a_quitar
+        ]
+        st.session_state.reinicio_casillas += 1
+        st.rerun()
+
+    if columna_derecha.button("Vaciar todo"):
+        st.session_state.canciones_elegidas = []
+        st.session_state.reinicio_casillas += 1
+        st.rerun()
+else:
+    st.info("Todavía no elegiste ninguna canción.")
