@@ -1,0 +1,261 @@
+# ---------------------------------------------------------
+# BUSCADOR DE CANCIONES + PLAYLIST DE RECOMENDACIÓN
+#
+# Qué hace esta versión:
+# - Una caja de búsqueda: al escribir un nombre (de canción,
+#   artista, álbum, género o subgénero) se buscan solas todas
+#   las coincidencias en TODOS esos campos.
+# - Un filtro opcional por género.
+# - Una tabla de resultados con una casilla "Elegir".
+# - Una lista de canciones seleccionadas (se guarda en el
+#   archivo canciones_elegidas.json, no se pierde al recargar).
+# - NUEVO: una playlist de recomendación. Usa clustering
+#   (método K-Means) para agrupar TODAS las canciones según
+#   sus características de audio (energía, bailabilidad, etc.).
+#   Después busca, en los grupos de las canciones que elegiste,
+#   las canciones más parecidas a las tuyas.
+#
+# Requisito:
+# - El archivo canciones.csv debe estar en la misma carpeta
+#   que app.py.
+# - Hay que instalar una librería nueva: scikit-learn.uv run --with streamlit --with pandas --with scikit-learn streamlit run app.py
+#
+# Cómo funciona el clustering, en simple:
+# 1. Cada canción tiene números (energía, tempo, etc.).
+# 2. K-Means reparte todas las canciones en "grupos" de
+#    canciones que suenan parecido.
+# 3. Se miran los grupos donde cayeron tus canciones elegidas.
+# 4. De esos grupos se muestran las canciones más cercanas a
+#    alguna de las tuyas. Esa es la playlist.
+# ---------------------------------------------------------
+import json
+import os
+
+import numpy as np
+import pandas as pd
+import streamlit as st
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+
+# --- Archivo donde se guardan las canciones elegidas ---
+archivo_de_elegidas = "canciones_elegidas.json"
+
+
+def cargar_elegidas():
+    """Lee el archivo y devuelve la lista de canciones elegidas."""
+    if os.path.exists(archivo_de_elegidas):
+        try:
+            with open(archivo_de_elegidas, "r", encoding="utf-8") as archivo:
+                return json.load(archivo)
+        except (json.JSONDecodeError, OSError):
+            return []
+    return []
+
+
+def guardar_elegidas(lista):
+    """Guarda en el archivo la lista de canciones elegidas."""
+    with open(archivo_de_elegidas, "w", encoding="utf-8") as archivo:
+        json.dump(lista, archivo)
+
+
+@st.cache_data
+def agrupar_canciones(datos_de_audio, cantidad_de_grupos):
+    """Agrupa todas las canciones con K-Means.
+
+    Devuelve los datos ya escalados y el número de grupo de cada canción.
+    Se calcula una sola vez y queda guardado en memoria, así la página
+    no se pone lenta.
+    """
+    escalador = StandardScaler()
+    datos_escalados = escalador.fit_transform(datos_de_audio)
+    modelo = KMeans(n_clusters=cantidad_de_grupos, random_state=42, n_init=10)
+    grupo_de_cada_cancion = modelo.fit_predict(datos_escalados)
+    return datos_escalados, grupo_de_cada_cancion
+
+
+# --- Cargar los datos ---
+canciones = pd.read_csv("canciones.csv")
+
+st.title("🎵 Buscador de canciones")
+
+# --- Columnas que se muestran y cómo se llaman en pantalla ---
+nombres_en_pantalla = {
+    "track_name": "Canción",
+    "track_artist": "Artista",
+    "track_album_name": "Álbum",
+    "playlist_genre": "Género",
+    "playlist_subgenre": "Subgénero",
+    "track_popularity": "Popularidad",
+}
+columnas_visibles = list(nombres_en_pantalla.keys())
+
+# --- Columnas donde se busca (todas, automáticamente) ---
+columnas_donde_buscar = [
+    "track_name",
+    "track_artist",
+    "track_album_name",
+    "playlist_genre",
+    "playlist_subgenre",
+]
+
+# --- Características de audio que usa el clustering ---
+# (si alguna no existe en tu archivo, simplemente se ignora)
+columnas_de_audio_deseadas = [
+    "danceability",
+    "energy",
+    "loudness",
+    "speechiness",
+    "acousticness",
+    "instrumentalness",
+    "liveness",
+    "valence",
+    "tempo",
+]
+columnas_de_audio = [c for c in columnas_de_audio_deseadas if c in canciones.columns]
+
+# --- Memoria de la página ---
+if "canciones_elegidas" not in st.session_state:
+    st.session_state.canciones_elegidas = cargar_elegidas()
+if "reinicio_casillas" not in st.session_state:
+    st.session_state.reinicio_casillas = 0
+
+# --- Buscador ---
+texto_buscado = st.text_input("Escribe para buscar (canción, artista, álbum...)")
+
+lista_de_generos = sorted(canciones["playlist_genre"].dropna().unique())
+generos_marcados = st.multiselect("Filtrar por género (opcional):", lista_de_generos)
+
+# --- Filtrar los resultados ---
+resultados = canciones
+
+if texto_buscado:
+    filas_que_coinciden = resultados[columnas_donde_buscar].astype(str).apply(
+        lambda columna: columna.str.contains(texto_buscado, case=False, na=False, regex=False)
+    ).any(axis=1)
+    resultados = resultados[filas_que_coinciden]
+
+if generos_marcados:
+    resultados = resultados[resultados["playlist_genre"].isin(generos_marcados)]
+
+st.write(f"Se encontraron {len(resultados)} canciones")
+
+# --- Tabla de resultados con casilla "Elegir" ---
+tabla_resultados = resultados[columnas_visibles].copy()
+tabla_resultados.insert(0, "Elegir", False)
+
+tabla_marcada = st.data_editor(
+    tabla_resultados,
+    disabled=columnas_visibles,
+    column_config=nombres_en_pantalla,
+    key=f"resultados_{st.session_state.reinicio_casillas}",
+)
+
+if st.button("➕ Agregar elegidas"):
+    filas_marcadas = tabla_marcada[tabla_marcada["Elegir"]].index.tolist()
+    for numero_fila in filas_marcadas:
+        if numero_fila not in st.session_state.canciones_elegidas:
+            st.session_state.canciones_elegidas.append(numero_fila)
+    guardar_elegidas(st.session_state.canciones_elegidas)
+    st.session_state.reinicio_casillas += 1
+    st.rerun()
+
+# --- Canciones seleccionadas ---
+st.subheader("⭐ Mis canciones seleccionadas")
+
+if st.session_state.canciones_elegidas:
+    tabla_elegidas = canciones.loc[st.session_state.canciones_elegidas, columnas_visibles].copy()
+    tabla_elegidas.insert(0, "Quitar", False)
+
+    tabla_elegidas_marcada = st.data_editor(
+        tabla_elegidas,
+        disabled=columnas_visibles,
+        column_config=nombres_en_pantalla,
+        key=f"elegidas_{st.session_state.reinicio_casillas}",
+    )
+
+    columna_izquierda, columna_derecha = st.columns(2)
+
+    if columna_izquierda.button("🗑️ Quitar marcadas"):
+        filas_a_quitar = tabla_elegidas_marcada[tabla_elegidas_marcada["Quitar"]].index.tolist()
+        st.session_state.canciones_elegidas = [
+            numero_fila
+            for numero_fila in st.session_state.canciones_elegidas
+            if numero_fila not in filas_a_quitar
+        ]
+        guardar_elegidas(st.session_state.canciones_elegidas)
+        st.session_state.reinicio_casillas += 1
+        st.rerun()
+
+    if columna_derecha.button("Vaciar todo"):
+        st.session_state.canciones_elegidas = []
+        guardar_elegidas(st.session_state.canciones_elegidas)
+        st.session_state.reinicio_casillas += 1
+        st.rerun()
+else:
+    st.info("Todavía no elegiste ninguna canción.")
+
+# ---------------------------------------------------------
+# PLAYLIST DE RECOMENDACIÓN (con clustering)
+# ---------------------------------------------------------
+st.subheader("🎧 Playlist de recomendación")
+
+if len(columnas_de_audio) < 3:
+    st.error("No encontré suficientes columnas de audio en canciones.csv para recomendar.")
+elif not st.session_state.canciones_elegidas:
+    st.info("Elegí algunas canciones (con 2 o 3 ya anda bien) y acá aparece tu playlist.")
+else:
+    with st.expander("Opciones de la playlist"):
+        cantidad_de_grupos = st.slider(
+            "Cantidad de grupos (más grupos = recomendaciones más parecidas, pero menos variadas)",
+            min_value=5,
+            max_value=40,
+            value=15,
+        )
+        cantidad_a_recomendar = st.slider(
+            "Cuántas canciones recomendar",
+            min_value=5,
+            max_value=50,
+            value=20,
+        )
+
+    # 1) Preparar los datos de audio (rellenar huecos con el valor típico)
+    datos_de_audio = canciones[columnas_de_audio]
+    datos_de_audio = datos_de_audio.fillna(datos_de_audio.median())
+
+    # 2) Agrupar TODAS las canciones con K-Means
+    datos_escalados, grupo_de_cada_cancion = agrupar_canciones(datos_de_audio, cantidad_de_grupos)
+
+    # 3) Ver en qué grupos cayeron las canciones elegidas
+    posiciones_elegidas = np.array(st.session_state.canciones_elegidas)
+    grupos_de_mis_canciones = np.unique(grupo_de_cada_cancion[posiciones_elegidas])
+
+    # 4) Quedarse con las canciones de esos grupos (menos las que ya elegí)
+    posiciones_en_mis_grupos = np.where(np.isin(grupo_de_cada_cancion, grupos_de_mis_canciones))[0]
+    posiciones_candidatas = np.setdiff1d(posiciones_en_mis_grupos, posiciones_elegidas)
+
+    if len(posiciones_candidatas) == 0:
+        st.warning("No encontré canciones parecidas para recomendar.")
+    else:
+        # 5) Medir qué tan lejos está cada candidata de CADA canción elegida
+        #    y quedarse con la distancia a la más cercana
+        candidatas = datos_escalados[posiciones_candidatas]
+        elegidas = datos_escalados[posiciones_elegidas]
+        distancias = np.linalg.norm(candidatas[:, None, :] - elegidas[None, :, :], axis=2)
+        distancia_a_la_mas_cercana = distancias.min(axis=1)
+
+        # 6) Tomar las más cercanas: esa es la playlist
+        orden = np.argsort(distancia_a_la_mas_cercana)[:cantidad_a_recomendar]
+        posiciones_recomendadas = posiciones_candidatas[orden]
+
+        playlist = canciones.iloc[posiciones_recomendadas][columnas_visibles].copy()
+        playlist = playlist.rename(columns=nombres_en_pantalla)
+
+        st.write(f"Playlist de {len(playlist)} canciones parecidas a las que elegiste:")
+        st.dataframe(playlist, hide_index=True)
+
+        st.download_button(
+            "⬇️ Descargar playlist (CSV)",
+            data=playlist.to_csv(index=False).encode("utf-8-sig"),
+            file_name="playlist_recomendada.csv",
+            mime="text/csv",
+        )
