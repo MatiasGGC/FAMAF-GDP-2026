@@ -362,6 +362,10 @@ else:
         playlist = canciones.iloc[posiciones_recomendadas][columnas_visibles].copy()
         playlist = playlist.rename(columns=nombres_en_pantalla)
 
+        ids_playlist = canciones.iloc[posiciones_recomendadas]["track_id"]
+        urls = ids_playlist.apply(lambda id: f"https://open.spotify.com/track/{id}")
+        playlist.insert(0, "Escuchar en Spotify", urls)
+
         st.write(f"Playlist de {len(playlist)} canciones parecidas a las que elegiste:")
         st.dataframe(playlist, hide_index=True)
 
