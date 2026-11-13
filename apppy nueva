@@ -12,6 +12,8 @@
 # - Una playlist de recomendación con clustering (K-Means).
 # - NUEVO: instrucciones claras arriba, mensajes de ayuda y una
 #   valoración con estrellas (se guarda en valoraciones.csv).
+# - NUEVO: cada canción de la playlist tiene un link para
+#   escucharla en Spotify (si canciones.csv tiene la columna track_id).
 #
 # Requisitos:
 # - El archivo canciones.csv debe estar en la misma carpeta
@@ -179,7 +181,7 @@ ritmo, si son bailables o más tranquilas, etc.) y te arma una playlist.
 5. **Si te equivocás**, marcá **"Quitar"** en la lista del paso 2 y apretá
    **"Quitar marcadas"**, o usá **"Vaciar todo"** para empezar de cero.
 6. **Mirá tu playlist** en el paso 3. Podés ajustar cuántas canciones querés en
-   "Opciones de la playlist".
+   "Opciones de la playlist" y tocar **"▶ Abrir"** para escucharlas en Spotify.
 7. **Descargá la playlist** con el botón **"Descargar playlist"** (se guarda como un
    archivo CSV que se abre con Excel).
 8. **Valorala con estrellas** (de 1 a 5) para contarnos qué tan conforme quedaste.
@@ -362,12 +364,20 @@ else:
         playlist = canciones.iloc[posiciones_recomendadas][columnas_visibles].copy()
         playlist = playlist.rename(columns=nombres_en_pantalla)
 
-        ids_playlist = canciones.iloc[posiciones_recomendadas]["track_id"]
-        urls = ids_playlist.apply(lambda id: f"https://open.spotify.com/track/{id}")
-        playlist.insert(0, "Escuchar en Spotify", urls)
+        # Link para escuchar cada canción en Spotify (solo si el CSV tiene track_id)
+        if "track_id" in canciones.columns:
+            ids_playlist = canciones.iloc[posiciones_recomendadas]["track_id"]
+            links = ids_playlist.apply(lambda track_id: f"https://open.spotify.com/track/{track_id}")
+            playlist.insert(0, "Escuchar en Spotify", links)
 
         st.write(f"Playlist de {len(playlist)} canciones parecidas a las que elegiste:")
-        st.dataframe(playlist, hide_index=True)
+
+        configuracion_columnas = {}
+        if "Escuchar en Spotify" in playlist.columns:
+            configuracion_columnas["Escuchar en Spotify"] = st.column_config.LinkColumn(
+                "Escuchar en Spotify", display_text="▶ Abrir"
+            )
+        st.dataframe(playlist, hide_index=True, column_config=configuracion_columnas)
 
         # --- Descargar la playlist ---
         st.markdown("**Llevate tu playlist:** se descarga como un archivo que se abre con Excel.")
