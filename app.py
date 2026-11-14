@@ -1,31 +1,430 @@
+# ---------------------------------------------------------
+# BUSCADOR DE CANCIONES + PLAYLIST DE RECOMENDACIÓN
+#
+# Qué hace esta versión:
+# - Una caja de búsqueda: al escribir un nombre (de canción,
+#   artista, álbum, género o subgénero) se buscan solas todas
+#   las coincidencias en TODOS esos campos.
+# - Un filtro opcional por género.
+# - Una tabla de resultados con una casilla "Elegir".
+# - Una lista de canciones seleccionadas (se guarda en el
+#   archivo canciones_elegidas.json, no se pierde al recargar).
+# - Una playlist de recomendación con clustering (K-Means).
+# - NUEVO: instrucciones claras arriba, mensajes de ayuda y una
+#   valoración con estrellas (se guarda en valoraciones.csv).
+# - NUEVO: cada canción de la playlist tiene un link para
+#   escucharla en Spotify (si canciones.csv tiene la columna track_id).
+#
+# Requisitos:
+# - El archivo canciones.csv debe estar en la misma carpeta
+#   que app.py.
+# - Librerías: streamlit, pandas, numpy, scikit-learn
+#
+# Cómo se ejecuta:
+#   python -m streamlit run app.py
+#
+# Cómo funciona el clustering, en simple:
+# 1. Cada canción tiene números (energía, tempo, etc.).
+# 2. K-Means reparte todas las canciones en "grupos" de
+#    canciones que suenan parecido.
+# 3. Se miran los grupos donde cayeron tus canciones elegidas.
+# 4. De esos grupos se muestran las canciones más cercanas a
+#    alguna de las tuyas. Esa es la playlist.
+# ---------------------------------------------------------
+import json
+import os
+from datetime import datetime
 
-import streamlit as st
+import numpy as np
 import pandas as pd
+import streamlit as st
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
 
-df = pd.read_csv("canciones.csv")
+# Configuración de la pestaña del navegador (debe ir primero)
+st.set_page_config(page_title="Buscador de canciones", page_icon="🎵", layout="wide")
 
-st.title("🎵 Listado de canciones")
+# --- Archivos donde se guarda información ---
+archivo_de_elegidas = "canciones_elegidas.json"
+archivo_de_valoraciones = "valoraciones.csv"
 
-st.dataframe(df)
 
+def guardar_valoracion(estrellas, cantidad_de_canciones):
+    """Guarda en valoraciones.csv las estrellas (1 a 5) que dio el usuario."""
+    nueva = pd.DataFrame(
+        [
+            {
+                "fecha": datetime.now().strftime("%d/%m/%Y %H:%M"),
+                "estrellas": estrellas,
+                "canciones_elegidas": cantidad_de_canciones,
+            }
+        ]
+    )
+    nueva.to_csv(
+        archivo_de_valoraciones,
+        mode="a",
+        header=not os.path.exists(archivo_de_valoraciones),
+        index=False,
+        encoding="utf-8-sig",
+    )
+
+
+def guardar_valoracion_estrellas(clave, cantidad_de_canciones):
+    """Se ejecuta sola cuando el usuario toca una estrella."""
+    seleccion = st.session_state.get(clave)
+    if seleccion is not None:
+        # st.feedback devuelve 0 a 4, lo pasamos a 1 a 5
+        guardar_valoracion(seleccion + 1, cantidad_de_canciones)
+
+
+def cargar_elegidas():
+    """Lee el archivo y devuelve la lista de canciones elegidas."""
+    if os.path.exists(archivo_de_elegidas):
+        try:
+            with open(archivo_de_elegidas, "r", encoding="utf-8") as archivo:
+                return json.load(archivo)
+        except (json.JSONDecodeError, OSError):
+            return []
+    return []
+
+
+def guardar_elegidas(lista):
+    """Guarda en el archivo la lista de canciones elegidas."""
+    with open(archivo_de_elegidas, "w", encoding="utf-8") as archivo:
+        json.dump(lista, archivo)
+
+
+@st.cache_data
+def agrupar_canciones(datos_de_audio, cantidad_de_grupos):
+    """Agrupa todas las canciones con K-Means.
+
+    Devuelve los datos ya escalados y el número de grupo de cada canción.
+    Se calcula una sola vez y queda guardado en memoria, así la página
+    no se pone lenta.
+    """
+    escalador = StandardScaler()
+    datos_escalados = escalador.fit_transform(datos_de_audio)
+    modelo = KMeans(n_clusters=cantidad_de_grupos, random_state=42, n_init=10)
+    grupo_de_cada_cancion = modelo.fit_predict(datos_escalados)
+    return datos_escalados, grupo_de_cada_cancion
+
+
+# --- Cargar los datos ---
+canciones = pd.read_csv("canciones.csv")
+
+# --- Columnas que se muestran y cómo se llaman en pantalla ---
+nombres_en_pantalla = {
+    "track_name": "Canción",
+    "track_artist": "Artista",
+    "track_album_name": "Álbum",
+    "playlist_genre": "Género",
+    "playlist_subgenre": "Subgénero",
+    "track_popularity": "Popularidad",
+}
+columnas_visibles = list(nombres_en_pantalla.keys())
+
+# --- Columnas donde se busca (todas, automáticamente) ---
+columnas_donde_buscar = [
+    "track_name",
+    "track_artist",
+    "track_album_name",
+    "playlist_genre",
+    "playlist_subgenre",
+]
+
+# --- Características de audio que usa el clustering ---
+# (si alguna no existe en tu archivo, simplemente se ignora)
+columnas_de_audio_deseadas = [
+    "danceability",
+    "energy",
+    "loudness",
+    "speechiness",
+    "acousticness",
+    "instrumentalness",
+    "liveness",
+    "valence",
+    "tempo",
+]
+columnas_de_audio = [c for c in columnas_de_audio_deseadas if c in canciones.columns]
+
+# --- Memoria de la página ---
+if "canciones_elegidas" not in st.session_state:
+    st.session_state.canciones_elegidas = cargar_elegidas()
+if "reinicio_casillas" not in st.session_state:
+    st.session_state.reinicio_casillas = 0
 
 # ---------------------------------------------------------
-# INSTRUCCIONES PARA EJECUTAR LA APP
-#
-# 1. Abrir una terminal en la carpeta del proyecto.
-#
-# 2. Crear un entorno virtual (solo la primera vez):
-#    python3 -m venv .venv
-#
-# 3. Activar el entorno virtual:
-#    source .venv/bin/activate
-#
-# 4. Instalar las librerías (solo la primera vez):
-#    python -m pip install streamlit pandas
-#
-# 5. Ejecutar la aplicación:
-#    python -m streamlit run app.py
-#
-# La aplicación se abrirá en el navegador.
-# Para detenerla, presionar Ctrl + C en la terminal.
+# ENCABEZADO Y GUÍA DE USO
 # ---------------------------------------------------------
+st.title("🎵 Buscador de canciones")
+st.write("Elegí canciones que te gusten y la página te arma una playlist de recomendación.")
+
+with st.expander("📖 ¿Cómo se usa? Guía paso a paso", expanded=True):
+    st.markdown(
+        """
+**¿Para qué sirve esta página?**
+Te ayuda a descubrir música nueva. Vos elegís canciones que ya te gustan y la página
+busca, entre todas las de la base de datos, otras que suenan parecido (por energía,
+ritmo, si son bailables o más tranquilas, etc.) y te arma una playlist.
+
+**Pasos a seguir**
+
+1. **Buscá** una canción, artista o álbum escribiendo en la caja de búsqueda del
+   paso 1. No hace falta elegir dónde buscar: la página mira en todos los campos.
+   Si querés, también podés filtrar por género.
+2. **Marcá** la casilla **"Elegir"** (primera columna de la tabla) en las canciones
+   que te gusten. Podés marcar varias a la vez.
+3. **Apretá el botón "Agregar elegidas"**. Las canciones pasan a la lista del paso 2.
+   Esa lista se guarda sola: si cerrás o recargás la página, no se pierde.
+4. **Repetí los pasos 1 a 3** con otras búsquedas hasta tener 2 o 3 canciones
+   (cuantas más elijas, más precisa es la recomendación).
+5. **Si te equivocás**, marcá **"Quitar"** en la lista del paso 2 y apretá
+   **"Quitar marcadas"**, o usá **"Vaciar todo"** para empezar de cero.
+6. **Mirá tu playlist** en el paso 3. Podés ajustar cuántas canciones querés en
+   "Opciones de la playlist" y tocar **"▶ Abrir"** para escucharlas en Spotify.
+7. **Descargá la playlist** con el botón **"Descargar playlist"** (se guarda como un
+   archivo CSV que se abre con Excel).
+8. **Valorala con estrellas** (de 1 a 5) para contarnos qué tan conforme quedaste.
+
+💡 **Tip:** si la playlist te parece muy repetida, elegí canciones de géneros distintos;
+si te parece muy variada, probá con más canciones del mismo estilo.
+"""
+    )
+
+# Mensaje de confirmación (queda guardado antes de recargar la página)
+mensaje = st.session_state.pop("mensaje", None)
+if mensaje:
+    st.success(mensaje)
+
+# ---------------------------------------------------------
+# PASO 1: BUSCAR
+# ---------------------------------------------------------
+st.header("1️⃣ Buscar canciones")
+
+columna_buscar, columna_genero = st.columns([2, 1])
+
+texto_buscado = columna_buscar.text_input(
+    "Buscar",
+    placeholder="Ej: Shakira, Thriller, rock...",
+    help="Busca al mismo tiempo en canción, artista, álbum, género y subgénero.",
+)
+
+lista_de_generos = sorted(canciones["playlist_genre"].dropna().unique())
+generos_marcados = columna_genero.multiselect(
+    "Filtrar por género (opcional)",
+    lista_de_generos,
+    placeholder="Todos los géneros",
+)
+
+# --- Filtrar los resultados ---
+resultados = canciones
+
+if texto_buscado:
+    filas_que_coinciden = resultados[columnas_donde_buscar].astype(str).apply(
+        lambda columna: columna.str.contains(texto_buscado, case=False, na=False, regex=False)
+    ).any(axis=1)
+    resultados = resultados[filas_que_coinciden]
+
+if generos_marcados:
+    resultados = resultados[resultados["playlist_genre"].isin(generos_marcados)]
+
+# --- Mensajes claros según lo que se encontró ---
+if len(resultados) == 0:
+    st.warning("No encontré canciones con esa búsqueda. Probá con otra palabra o quitá el filtro de género.")
+else:
+    st.caption(f"Se encontraron {len(resultados):,} canciones. Marcá la casilla “Elegir” de las que te gusten.")
+
+# --- Tabla de resultados con casilla "Elegir" ---
+tabla_resultados = resultados[columnas_visibles].copy()
+tabla_resultados.insert(0, "Elegir", False)
+
+tabla_marcada = st.data_editor(
+    tabla_resultados,
+    disabled=columnas_visibles,
+    column_config=nombres_en_pantalla,
+    key=f"resultados_{st.session_state.reinicio_casillas}",
+)
+
+if st.button("➕ Agregar elegidas", type="primary"):
+    filas_marcadas = tabla_marcada[tabla_marcada["Elegir"]].index.tolist()
+    if not filas_marcadas:
+        st.warning("Primero marcá la casilla “Elegir” de al menos una canción.")
+    else:
+        agregadas = 0
+        for numero_fila in filas_marcadas:
+            if numero_fila not in st.session_state.canciones_elegidas:
+                st.session_state.canciones_elegidas.append(numero_fila)
+                agregadas += 1
+        guardar_elegidas(st.session_state.canciones_elegidas)
+        st.session_state.mensaje = f"✅ Se agregaron {agregadas} canciones a tu lista."
+        st.session_state.reinicio_casillas += 1
+        st.rerun()
+
+# ---------------------------------------------------------
+# PASO 2: MIS CANCIONES SELECCIONADAS
+# ---------------------------------------------------------
+st.header(f"2️⃣ Mis canciones seleccionadas ({len(st.session_state.canciones_elegidas)})")
+
+if st.session_state.canciones_elegidas:
+    st.caption("Marcá “Quitar” en las que ya no quieras y apretá el botón de abajo.")
+
+    tabla_elegidas = canciones.loc[st.session_state.canciones_elegidas, columnas_visibles].copy()
+    tabla_elegidas.insert(0, "Quitar", False)
+
+    tabla_elegidas_marcada = st.data_editor(
+        tabla_elegidas,
+        disabled=columnas_visibles,
+        column_config=nombres_en_pantalla,
+        key=f"elegidas_{st.session_state.reinicio_casillas}",
+    )
+
+    columna_izquierda, columna_derecha = st.columns(2)
+
+    if columna_izquierda.button("🗑️ Quitar marcadas"):
+        filas_a_quitar = tabla_elegidas_marcada[tabla_elegidas_marcada["Quitar"]].index.tolist()
+        if not filas_a_quitar:
+            st.warning("Primero marcá la casilla “Quitar” de al menos una canción.")
+        else:
+            st.session_state.canciones_elegidas = [
+                numero_fila
+                for numero_fila in st.session_state.canciones_elegidas
+                if numero_fila not in filas_a_quitar
+            ]
+            guardar_elegidas(st.session_state.canciones_elegidas)
+            st.session_state.mensaje = f"🗑️ Se quitaron {len(filas_a_quitar)} canciones."
+            st.session_state.reinicio_casillas += 1
+            st.rerun()
+
+    if columna_derecha.button("Vaciar todo"):
+        st.session_state.canciones_elegidas = []
+        guardar_elegidas(st.session_state.canciones_elegidas)
+        st.session_state.mensaje = "Tu lista quedó vacía."
+        st.session_state.reinicio_casillas += 1
+        st.rerun()
+else:
+    st.info("Todavía no elegiste ninguna canción. Buscá arriba y marcá las que te gusten.")
+
+# ---------------------------------------------------------
+# PASO 3: PLAYLIST DE RECOMENDACIÓN (con clustering)
+# ---------------------------------------------------------
+st.header("3️⃣ Playlist de recomendación")
+
+if len(columnas_de_audio) < 3:
+    st.error("No encontré suficientes columnas de audio en canciones.csv para recomendar.")
+elif not st.session_state.canciones_elegidas:
+    st.info("Elegí algunas canciones (con 2 o 3 ya anda bien) y acá aparece tu playlist.")
+else:
+    with st.expander("⚙️ Opciones de la playlist (opcional)"):
+        cantidad_de_grupos = st.slider(
+            "Cantidad de grupos",
+            min_value=5,
+            max_value=40,
+            value=15,
+            help="Más grupos = recomendaciones más parecidas, pero menos variadas.",
+        )
+        cantidad_a_recomendar = st.slider(
+            "Cuántas canciones recomendar",
+            min_value=5,
+            max_value=50,
+            value=20,
+        )
+
+    # Si el usuario no abrió las opciones, los sliders igual tienen sus valores por defecto.
+
+    # 1) Preparar los datos de audio (rellenar huecos con el valor típico)
+    datos_de_audio = canciones[columnas_de_audio]
+    datos_de_audio = datos_de_audio.fillna(datos_de_audio.median())
+
+    # 2) Agrupar TODAS las canciones con K-Means
+    with st.spinner("Armando tu playlist..."):
+        datos_escalados, grupo_de_cada_cancion = agrupar_canciones(datos_de_audio, cantidad_de_grupos)
+
+    # 3) Ver en qué grupos cayeron las canciones elegidas
+    posiciones_elegidas = np.array(st.session_state.canciones_elegidas)
+    grupos_de_mis_canciones = np.unique(grupo_de_cada_cancion[posiciones_elegidas])
+
+    # 4) Quedarse con las canciones de esos grupos (menos las que ya elegí)
+    posiciones_en_mis_grupos = np.where(np.isin(grupo_de_cada_cancion, grupos_de_mis_canciones))[0]
+    posiciones_candidatas = np.setdiff1d(posiciones_en_mis_grupos, posiciones_elegidas)
+
+    if len(posiciones_candidatas) == 0:
+        st.warning("No encontré canciones parecidas para recomendar.")
+    else:
+        # 5) Medir qué tan lejos está cada candidata de CADA canción elegida
+        #    y quedarse con la distancia a la más cercana
+        candidatas = datos_escalados[posiciones_candidatas]
+        elegidas = datos_escalados[posiciones_elegidas]
+        distancias = np.linalg.norm(candidatas[:, None, :] - elegidas[None, :, :], axis=2)
+        distancia_a_la_mas_cercana = distancias.min(axis=1)
+
+        # 6) Tomar las más cercanas: esa es la playlist
+        orden = np.argsort(distancia_a_la_mas_cercana)[:cantidad_a_recomendar]
+        posiciones_recomendadas = posiciones_candidatas[orden]
+
+        playlist = canciones.iloc[posiciones_recomendadas][columnas_visibles].copy()
+        playlist = playlist.rename(columns=nombres_en_pantalla)
+
+        # Link para escuchar cada canción en Spotify (solo si el CSV tiene track_id)
+        if "track_id" in canciones.columns:
+            ids_playlist = canciones.iloc[posiciones_recomendadas]["track_id"]
+            links = ids_playlist.apply(lambda track_id: f"https://open.spotify.com/track/{track_id}")
+            playlist.insert(0, "Escuchar en Spotify", links)
+
+        st.write(f"Playlist de {len(playlist)} canciones parecidas a las que elegiste:")
+
+        configuracion_columnas = {}
+        if "Escuchar en Spotify" in playlist.columns:
+            configuracion_columnas["Escuchar en Spotify"] = st.column_config.LinkColumn(
+                "Escuchar en Spotify", display_text="▶ Abrir"
+            )
+        st.dataframe(playlist, hide_index=True, column_config=configuracion_columnas)
+
+        # --- Descargar la playlist ---
+        st.markdown("**Llevate tu playlist:** se descarga como un archivo que se abre con Excel.")
+        st.download_button(
+            "⬇️ Descargar playlist",
+            data=playlist.to_csv(index=False).encode("utf-8-sig"),
+            file_name="playlist_recomendada.csv",
+            mime="text/csv",
+            type="primary",
+        )
+
+        # --- Valoración con estrellas ---
+        st.markdown("---")
+        st.subheader("⭐ ¿Qué tan conforme quedaste con esta playlist?")
+        st.caption("Tocá una estrella: 1 = nada conforme, 5 = muy conforme.")
+
+        # La clave cambia cuando cambia tu lista, así podés valorar cada playlist nueva
+        clave_estrellas = f"estrellas_{st.session_state.reinicio_casillas}"
+        cantidad_elegidas = len(st.session_state.canciones_elegidas)
+
+        if hasattr(st, "feedback"):
+            st.feedback(
+                "stars",
+                key=clave_estrellas,
+                on_change=guardar_valoracion_estrellas,
+                args=(clave_estrellas, cantidad_elegidas),
+            )
+            if st.session_state.get(clave_estrellas) is not None:
+                st.success(
+                    f"¡Gracias! Le diste {st.session_state[clave_estrellas] + 1} de 5 estrellas."
+                )
+        else:
+            # Plan B si tu versión de Streamlit es vieja (no tiene estrellas)
+            estrellas = st.slider("Tu valoración (1 a 5)", 1, 5, 5)
+            if st.button("Enviar valoración"):
+                guardar_valoracion(estrellas, cantidad_elegidas)
+                st.success(f"¡Gracias! Le diste {estrellas} de 5 estrellas.")
+
+        # --- Promedio de todas las valoraciones ---
+        if os.path.exists(archivo_de_valoraciones):
+            try:
+                valoraciones = pd.read_csv(archivo_de_valoraciones)
+                if len(valoraciones) > 0:
+                    promedio = valoraciones["estrellas"].mean()
+                    st.caption(
+                        f"Satisfacción promedio: {promedio:.1f} de 5 "
+                        f"({len(valoraciones)} valoraciones)"
+                    )
+            except (pd.errors.ParserError, pd.errors.EmptyDataError, KeyError):
+                pass
